@@ -1,0 +1,6 @@
+{
+  "name": "One Voice 27 Connect",
+  "description": "Northern India Union Seventh-day Adventist digital ministry platform connecting seekers with local pastors, congregations, Bible studies, and union analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

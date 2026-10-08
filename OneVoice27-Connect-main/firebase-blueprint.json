@@ -1,0 +1,182 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Account & Role Profile",
+      "description": "Authenticated user with role-based access control and approval state",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "Display name" },
+        "photoURL": { "type": "string", "description": "Avatar URL" },
+        "role": {
+          "type": "string",
+          "enum": ["super_admin", "union_admin", "worker", "chat_user", "pending_user"],
+          "description": "Assigned enterprise RBAC role"
+        },
+        "assignedUnion": {
+          "type": "string",
+          "description": "Geographical jurisdiction / Union affiliation"
+        },
+        "approvalStatus": {
+          "type": "string",
+          "enum": ["pending", "approved", "rejected"],
+          "description": "Administrator approval gate status"
+        },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["uid", "email", "role", "approvalStatus"]
+    },
+    "Seeker": {
+      "title": "Protected Seeker Pastoral Record",
+      "description": "Seeker ministry document stripped of personalData, phone, email, and address. Accessible only to Super Admin and Union Admin. Field workers are barred.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Seeker unique ID" },
+        "name": { "type": "string", "description": "Ministry pseudonym / name" },
+        "assignedUnion": {
+          "type": "string",
+          "description": "Union jurisdiction responsible for care"
+        },
+        "assignedWorker": {
+          "type": "string",
+          "description": "Worker UID or identity assigned to case"
+        },
+        "chatReference": {
+          "type": "string",
+          "description": "Internal anonymous chat reference ID"
+        },
+        "stage": {
+          "type": "string",
+          "description": "Discipleship pathway milestone"
+        },
+        "stageProgress": { "type": "number", "description": "Milestone progression percentage" },
+        "assignedChurch": { "type": "string", "description": "Local congregation campus" },
+        "interests": { "type": "array", "description": "Spiritual study interests" },
+        "tasks": { "type": "array", "description": "Assigned pastoral tasks" }
+      },
+      "required": ["id", "assignedUnion"]
+    },
+    "SeekerTask": {
+      "title": "Pastoral Task",
+      "description": "Field worker task with zero PII exposure",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "seekerId": { "type": "string" },
+        "seekerAlias": { "type": "string" },
+        "title": { "type": "string" },
+        "dueDateOrStatus": { "type": "string" },
+        "completed": { "type": "boolean" },
+        "assignedWorker": { "type": "string" },
+        "assignedUnion": { "type": "string" }
+      },
+      "required": ["id", "seekerId", "title", "assignedWorker", "assignedUnion"]
+    },
+    "Chat": {
+      "title": "Secure Internal Chat Session",
+      "description": "In-app messaging between worker and seeker with ownership strictly enforced by participants array",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Chat session ID" },
+        "seekerId": { "type": "string", "description": "Seeker document ID" },
+        "participants": { "type": "array", "description": "Array of participant UIDs with access" },
+        "assignedWorkerId": { "type": "string", "description": "Worker ID" },
+        "assignedUnion": { "type": "string", "description": "Union jurisdiction" },
+        "lastMessage": { "type": "string", "description": "Last message snippet" },
+        "updatedAt": { "type": "string", "description": "Last activity timestamp" }
+      },
+      "required": ["id", "seekerId", "participants"]
+    },
+    "ChatMessage": {
+      "title": "Internal Chat Message",
+      "description": "Individual message inside secure internal chat",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Message ID" },
+        "senderID": { "type": "string", "description": "Sender user ID" },
+        "receiverID": { "type": "string", "description": "Recipient ID" },
+        "message": { "type": "string", "description": "Encrypted message text" },
+        "role": { "type": "string", "description": "Sender role tier" },
+        "timestamp": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["id", "senderID", "receiverID", "message", "timestamp", "role"]
+    },
+    "AuditLog": {
+      "title": "Immutable Security Audit Log",
+      "description": "Section 31 tamper-resistant record tracking database and PII access",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Log record ID" },
+        "userID": { "type": "string", "description": "Actor user ID" },
+        "userEmail": { "type": "string", "description": "Actor email" },
+        "userRole": { "type": "string", "description": "Actor role at time of access" },
+        "action": { "type": "string", "description": "Action performed (e.g. VIEW_SEEKER_PII, EXPORT_BLOCKED)" },
+        "accessedData": { "type": "string", "description": "Scope or ID of data touched" },
+        "timestamp": { "type": "string", "description": "ISO timestamp" },
+        "location": { "type": "string", "description": "Client IP / Region identifier" }
+      },
+      "required": ["id", "userID", "action", "timestamp"]
+    },
+    "DeletionRequest": {
+      "title": "Data Deletion Request",
+      "description": "Seeker data erasure and GDPR Right-to-be-Forgotten request",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Request record ID" },
+        "seekerId": { "type": "string", "description": "Seeker record ID requested for erasure" },
+        "reason": { "type": "string", "description": "Reason for deletion request" },
+        "requestedBy": { "type": "string", "description": "User or Seeker email" },
+        "status": { "type": "string", "description": "Request status: pending, approved, processed" },
+        "timestamp": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["id", "seekerId", "timestamp"]
+    },
+    "SeekerPersonalData": {
+      "title": "Strictly Protected Seeker PII",
+      "description": "Personal identification data isolated from workers in subcollection",
+      "type": "object",
+      "properties": {
+        "fullName": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "address": { "type": "string" },
+        "personalNotes": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User accounts and approval status"
+    },
+    "/seekers/{seekerId}": {
+      "schema": "Seeker",
+      "description": "Protected seeker records with isolated personalData"
+    },
+    "/seekers_private/{seekerId}": {
+      "schema": "SeekerPersonalData",
+      "description": "Isolated seeker PII collection inaccessible to field workers"
+    },
+    "/seekers_tasks/{taskId}": {
+      "schema": "SeekerTask",
+      "description": "Pastoral tasks collection accessible by field workers via role-based queries"
+    },
+    "/chats/{chatId}": {
+      "schema": "Chat",
+      "description": "Secure in-app chat channels"
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Audited in-app chat messages"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Section 31 immutable security audit logs"
+    },
+    "/deletion_requests/{requestId}": {
+      "schema": "DeletionRequest",
+      "description": "Data deletion and erasure requests"
+    }
+  }
+}

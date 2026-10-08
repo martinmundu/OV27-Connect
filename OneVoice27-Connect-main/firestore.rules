@@ -1,0 +1,299 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // 0. AUTHENTICATION & CUSTOM CLAIMS RBAC (Requirement 7 & 8)
+    // =========================================================================
+    // Custom claims are the EXCLUSIVE authoritative source for roles, approval, and unionId.
+    // Client-side /users document fallback is STRICTLY PROHIBITED.
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function hasClaim(key) {
+      return signedIn() && key in request.auth.token;
+    }
+
+    function isSuperAdmin() {
+      return signedIn()
+        && hasClaim('role') && request.auth.token.role == 'super_admin'
+        && hasClaim('approved') && request.auth.token.approved == true;
+    }
+
+    function isUnionAdmin() {
+      return signedIn()
+        && hasClaim('role') && request.auth.token.role == 'union_admin'
+        && hasClaim('approved') && request.auth.token.approved == true
+        && hasClaim('unionId') && request.auth.token.unionId is string;
+    }
+
+    function isWorker() {
+      return signedIn()
+        && hasClaim('role') && request.auth.token.role == 'worker'
+        && hasClaim('approved') && request.auth.token.approved == true;
+    }
+
+    function isChatUser() {
+      return signedIn()
+        && hasClaim('role') && request.auth.token.role == 'chat_user'
+        && hasClaim('approved') && request.auth.token.approved == true;
+    }
+
+    // Standardized claim: unionId (Requirement 8)
+    function userUnion() {
+      return hasClaim('unionId') ? request.auth.token.unionId : '';
+    }
+
+    // =========================================================================
+    // 1. USER ACCOUNTS & RBAC PROFILES (/users/{userId})
+    // =========================================================================
+    match /users/{userId} {
+      allow get: if signedIn() && (request.auth.uid == userId || isSuperAdmin());
+      allow list: if isSuperAdmin();
+
+      // On registration: user can ONLY create a pending account
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && (!('role' in request.resource.data) || request.resource.data.role == 'pending_user')
+        && (!('approvalStatus' in request.resource.data) || request.resource.data.approvalStatus == 'pending');
+
+      // On update: Super Admin can update any field.
+      // Owner can update profile info but CANNOT modify role, approvalStatus, assignedUnion, or permissions!
+      allow update: if isSuperAdmin() || (
+        isOwner(userId) &&
+        !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['role', 'approvalStatus', 'assignedUnion', 'permissions', 'privileges'])
+      );
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 2. PRIVATE SEEKER DOSSIER (/seekers_private/{seekerId})
+    // =========================================================================
+    // Requirement 12: Single authoritative location for sensitive PII.
+    // RESTRICTED TO: super_admin, and union_admin belonging to the seeker's Union.
+    // WORKERS AND CHAT USERS: STRICTLY DENIED!
+    match /seekers_private/{seekerId} {
+      allow read: if isSuperAdmin()
+        || (isUnionAdmin() && resource.data.assignedUnion == userUnion());
+
+      allow create: if isSuperAdmin()
+        || (isUnionAdmin() && request.resource.data.assignedUnion == userUnion());
+
+      allow update: if isSuperAdmin()
+        || (isUnionAdmin()
+            && resource.data.assignedUnion == userUnion()
+            && request.resource.data.assignedUnion == userUnion());
+
+      allow delete: if isSuperAdmin();
+
+      match /{subpath=**} {
+        allow read, write: if isSuperAdmin()
+          || (isUnionAdmin() && get(/databases/$(database)/documents/seekers_private/$(seekerId)).data.assignedUnion == userUnion());
+      }
+    }
+
+    // =========================================================================
+    // 3. SEEKERS PASTORAL RECORDS (/seekers/{seekerId})
+    // =========================================================================
+    // Requirement 12: Non-sensitive workflow information only.
+    // RESTRICTED TO: Super Admin and relevant Union Admin.
+    // WORKERS AND CHAT USERS: DENIED.
+    // PII fields (phone, email, address, personalNotes, fullName) are strictly barred.
+    match /seekers/{seekerId} {
+      allow read: if isSuperAdmin()
+        || (isUnionAdmin() && resource.data.assignedUnion == userUnion());
+
+      allow create: if (isSuperAdmin() || isUnionAdmin())
+        && !request.resource.data.keys().hasAny(['fullName', 'phone', 'email', 'address', 'personalNotes', 'privateData']);
+
+      allow update: if (isSuperAdmin()
+        || (isUnionAdmin() && resource.data.assignedUnion == userUnion()))
+        && !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['fullName', 'phone', 'email', 'address', 'personalNotes', 'privateData']);
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 4. PASTORAL TASKS COLLECTION (/seekers_tasks/{taskId})
+    // =========================================================================
+    // Requirement 5 & 13:
+    // Workers access ONLY their assigned tasks (assignedWorker == request.auth.uid).
+    // Union Admin access ONLY their union tasks (assignedUnion == userUnion()).
+    // Super Admin accesses all.
+    // WORKERS CANNOT CREATE TASKS! Only super_admin and union_admin may create.
+    // Workers cannot receive seeker PII.
+    match /seekers_tasks/{taskId} {
+      allow get: if isSuperAdmin()
+        || (isUnionAdmin() && resource.data.assignedUnion == userUnion())
+        || (isWorker() && resource.data.assignedWorker == request.auth.uid);
+
+      allow list: if isSuperAdmin()
+        || (isUnionAdmin() && resource.data.assignedUnion == userUnion())
+        || (isWorker() && resource.data.assignedWorker == request.auth.uid);
+
+      allow create: if (
+        isSuperAdmin()
+        || (isUnionAdmin() && request.resource.data.assignedUnion == userUnion())
+      ) && !request.resource.data.keys().hasAny(['fullName', 'phone', 'email', 'address', 'personalNotes']);
+
+      allow update: if isSuperAdmin()
+        || (isUnionAdmin() && resource.data.assignedUnion == userUnion())
+        || (
+          isWorker()
+          && resource.data.assignedWorker == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['completed', 'status', 'workerNotes', 'notes', 'dueDate', 'dueDateOrStatus', 'updatedAt'])
+          && !request.resource.data.diff(resource.data).affectedKeys()
+              .hasAny(['assignedWorker', 'assignedUnion', 'seekerId', 'chatReference', 'caseNumber'])
+          && !request.resource.data.keys().hasAny(['fullName', 'phone', 'email', 'address', 'personalNotes'])
+        );
+
+      allow delete: if isSuperAdmin()
+        || (isUnionAdmin() && resource.data.assignedUnion == userUnion());
+    }
+
+    // =========================================================================
+    // 5. INTERNAL IN-APP CHAT CONVERSATIONS (/chats/{chatId})
+    // =========================================================================
+    // Access strictly verifies the parent chat document's assignedUnion or assignedWorker:
+    // - Super Admin: Full administrative oversight.
+    // - Union Admin: Access bounded to assignedUnion == userUnion().
+    // - Worker: Access bounded to assignedWorker == request.auth.uid.
+    // - Chat User: Access bounded to request.auth.uid in participants.
+    //
+    // CRITICAL SECURITY CONSTRAINT:
+    // assignedUnion, assignedWorker, participants, seekerId, and caseNumber
+    // are STRICTLY IMMUTABLE to all standard users (union_admin, worker, chat_user).
+    match /chats/{chatId} {
+      allow get, list: if isSuperAdmin()
+        || (isUnionAdmin() && resource.data.assignedUnion == userUnion())
+        || (isWorker() && resource.data.assignedWorker == request.auth.uid)
+        || (isChatUser() && resource.data.participants is list && request.auth.uid in resource.data.participants);
+
+      allow create: if isSuperAdmin()
+        || (isUnionAdmin() && request.resource.data.assignedUnion == userUnion());
+
+      allow update: if isSuperAdmin()
+        || (
+          // For all standard users: assignedUnion, assignedWorker, participants, seekerId must NOT be modified
+          !request.resource.data.diff(resource.data).affectedKeys()
+              .hasAny(['assignedUnion', 'assignedWorker', 'participants', 'seekerId', 'caseNumber'])
+          && (
+            // Union Admin updating within their jurisdiction
+            (isUnionAdmin() && resource.data.assignedUnion == userUnion())
+            || (
+              // Worker assigned to this chat or registered Chat User participant
+              (
+                (isWorker() && resource.data.assignedWorker == request.auth.uid)
+                || (isChatUser() && resource.data.participants is list && request.auth.uid in resource.data.participants)
+              )
+              && request.resource.data.diff(resource.data).affectedKeys()
+                  .hasOnly(['lastMessage', 'lastMessageTime', 'updatedAt', 'typing', 'status', 'unreadCount'])
+            )
+          )
+        );
+
+      allow delete: if isSuperAdmin();
+
+      // =======================================================================
+      // NESTED SUBCOLLECTION: /chats/{chatId}/messages/{messageId}
+      // Authoritative message storage replacing flat /chat_messages collection.
+      // Message rules verify the parent chat document's assignedUnion or assignedWorker.
+      // =======================================================================
+      match /messages/{messageId} {
+        allow read: if isSuperAdmin()
+          || (
+            isUnionAdmin()
+            && get(/databases/$(database)/documents/chats/$(chatId)).data.assignedUnion == userUnion()
+          )
+          || (
+            isWorker()
+            && get(/databases/$(database)/documents/chats/$(chatId)).data.assignedWorker == request.auth.uid
+          )
+          || (
+            isChatUser()
+            && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+          );
+
+        allow create: if (
+            request.resource.data.senderID == request.auth.uid
+            || request.resource.data.senderId == request.auth.uid
+          )
+          && (
+            isSuperAdmin()
+            || (
+              isUnionAdmin()
+              && get(/databases/$(database)/documents/chats/$(chatId)).data.assignedUnion == userUnion()
+            )
+            || (
+              isWorker()
+              && get(/databases/$(database)/documents/chats/$(chatId)).data.assignedWorker == request.auth.uid
+            )
+            || (
+              isChatUser()
+              && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+            )
+          );
+
+        allow update, delete: if isSuperAdmin();
+      }
+    }
+
+    // Flat /chat_messages collection is strictly rejected (enforcing nested /chats/{chatId}/messages)
+    match /chat_messages/{messageId} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // 6. PASTORAL INTERACTION LOGS (/pastoral_logs/{logId})
+    // =========================================================================
+    match /pastoral_logs/{logId} {
+      allow read: if isSuperAdmin() || isUnionAdmin();
+      allow create: if (isUnionAdmin() || isSuperAdmin())
+        && request.resource.data.notes is string
+        && request.resource.data.seekerId is string;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 7. SECTION 31 IMMUTABLE AUDIT LOGS (/audit_logs/{logId})
+    // Server-side only via Firebase Admin SDK. Direct client writes forbidden.
+    // =========================================================================
+    match /audit_logs/{logId} {
+      allow read, list: if isSuperAdmin();
+      allow create, update, delete: if false; // Immutable, Admin SDK only
+    }
+
+    // =========================================================================
+    // 8. DATA DELETION REQUESTS (/deletion_requests/{requestId})
+    // =========================================================================
+    match /deletion_requests/{requestId} {
+      allow create: if signedIn();
+      allow read, list: if isSuperAdmin() || isUnionAdmin();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 9. PUBLIC REGISTRATION IDEMPOTENCY REQUESTS
+    // =========================================================================
+    match /public_registration_requests/{requestId} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // 10. DEFAULT DENY
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
